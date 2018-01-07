@@ -32,10 +32,11 @@ import { IWorkbenchEditorService, DelegatingWorkbenchEditorService } from 'vs/wo
 import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { IEditorGroupService } from 'vs/workbench/services/group/common/groupService';
 import { ITextFileService } from 'vs/workbench/services/textfile/common/textfiles';
-import { ScrollType } from 'vs/editor/common/editorCommon';
+import { ScrollType, IDiffEditorViewState } from 'vs/editor/common/editorCommon';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { Registry } from 'vs/platform/registry/common/platform';
+import URI from 'vs/base/common/uri';
 
 /**
  * The text editor that leverages the diff text editor for the editing experience.
@@ -121,6 +122,19 @@ export class TextDiffEditor extends BaseTextEditor {
 		return diffEditorInstantiator.createInstance(DiffEditorWidget, parent.getHTMLElement(), configuration);
 	}
 
+	private getResourceName(): URI {
+		const activeDiffInput = <DiffEditorInput>this.input;
+
+		if (!activeDiffInput || !activeDiffInput.originalInput || !activeDiffInput.modifiedInput) {
+			return null;
+		}
+
+		const resourceName =
+			activeDiffInput.originalInput.getResource().toString() + '___' +
+			activeDiffInput.modifiedInput.getResource().toString();
+		return URI.from({ scheme: '', authority: '', path: resourceName });
+	}
+
 	public setInput(input: EditorInput, options?: EditorOptions): TPromise<void> {
 
 		// Return early for same input unless we force to open
@@ -135,6 +149,9 @@ export class TextDiffEditor extends BaseTextEditor {
 
 			return TPromise.wrap<void>(null);
 		}
+
+		// Remember view settings if input changes.
+		this.doSaveTextEditorViewState();
 
 		// Dispose previous diff navigator
 		if (this.diffNavigator) {
@@ -159,8 +176,17 @@ export class TextDiffEditor extends BaseTextEditor {
 				const diffEditor = <IDiffEditor>this.getControl();
 				diffEditor.setModel((<TextDiffEditorModel>resolvedModel).textDiffEditorModel);
 
+				// Always restore View State if any associated.
+				const resourceName = this.getResourceName();
+				if (resourceName) {
+					const diffViewState =	<IDiffEditorViewState>this.loadTextEditorViewState(resourceName);
+					if (diffViewState) {
+						diffEditor.restoreViewState(diffViewState);
+					}
+				}
+
 				// Handle TextOptions
-				let alwaysRevealFirst = true;
+				let alwaysRevealFirst = false;
 				if (options && types.isFunction((<TextEditorOptions>options).apply)) {
 					const hadOptions = (<TextEditorOptions>options).apply(<IDiffEditor>diffEditor, ScrollType.Immediate);
 					if (hadOptions) {
@@ -168,7 +194,7 @@ export class TextDiffEditor extends BaseTextEditor {
 					}
 				}
 
-				// Listen on diff updated changes to reveal the first change
+				// Listen on diff updated changes changes to reveal the first change
 				this.diffNavigator = new DiffNavigator(diffEditor, {
 					alwaysRevealFirst
 				});
@@ -276,6 +302,7 @@ export class TextDiffEditor extends BaseTextEditor {
 	}
 
 	public clearInput(): void {
+		this.doSaveTextEditorViewState();
 
 		// Dispose previous diff navigator
 		if (this.diffNavigator) {
@@ -287,6 +314,13 @@ export class TextDiffEditor extends BaseTextEditor {
 
 		// Pass to super
 		super.clearInput();
+	}
+
+	private doSaveTextEditorViewState(): void {
+		const resourceName = this.getResourceName();
+		if (resourceName) {
+			this.saveTextEditorViewState(resourceName);
+		}
 	}
 
 	public getDiffNavigator(): DiffNavigator {
